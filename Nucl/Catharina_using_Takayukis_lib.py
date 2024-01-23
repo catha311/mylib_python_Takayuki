@@ -1935,9 +1935,9 @@ import pycuba
 from scipy import special
 
 ######### directory for OG NMEs
-directory="/Users/cbrase/Documents/2BC/Takayuki_shared_with_me/OG_2/"
+directory="/Users/cbrase/Documents/2BC-1/VC/Data/"
 ######### Q values 
-Qlist = [1, 5] + list(range(10,60,10)) + list(range(100,350,50))
+Qlist = list(range(10,60,10)) + list(range(100,350,50))
 
 ######### specifications to which you want recouple the NMEs to
 # example: j = [0,0,0, 1, 1] # n=0, l=0, m=0, s= 1/2, neutron
@@ -1969,7 +1969,7 @@ def createfilesfunc(diagram,nucl1i,nucl1f,nucl2i,nucl2f,itoverin):
         postQfile='-NLO_TwBME-HO_NN-only_N3LO_EM500_bare_hw20_emax2_e2max4.snt'
         postQfileexp='-NLO_TwBME-HO_NN-only_N3LO_EM500_bare_hw20_emax2_e2max4'+qnumbers+'.dat'
         ######### export to
-        fileexp=directory+'recoupled_2/'+preQfile.replace("_Tz0","_t1it1ft2it2f"+str(t1i)+str(t1f)+str(t2i)+str(t2f))+postQfileexp
+        fileexp=directory+'recoupled/'+preQfile.replace("_Tz0","_t1it1ft2it2f"+str(t1i)+str(t1f)+str(t2i)+str(t2f))+postQfileexp
         ######### open file to write in
         file_save=open(fileexp,"w")
         print(preQfile+postQfile, file=file_save)
@@ -1994,31 +1994,34 @@ def createfilesfunc(diagram,nucl1i,nucl1f,nucl2i,nucl2f,itoverin):
 def createallsimultfunc(nucleon1f,nucleon2f,nucleon1i,nucleon2i):
     print("nucleon1f,nucleon2f,nucleon1i,nucleon2i")
     print(nucleon1f,nucleon2f,nucleon1i,nucleon2i)
-    createfilesfunc('PIFTel_2B',nucleon1f,nucleon2f,nucleon1i,nucleon2i,itoverin=[2])
-    createfilesfunc('PIFTmag_2B',nucleon1f,nucleon2f,nucleon1i,nucleon2i,itoverin=[1,3])
-    createfilesfunc('SGTel_2B',nucleon1f,nucleon2f,nucleon1i,nucleon2i,itoverin=[2])
-    createfilesfunc('SGTmag_2B',nucleon1f,nucleon2f,nucleon1i,nucleon2i,itoverin=[1,3])
+    # createfilesfunc('PIFTel_2B',nucleon1f,nucleon2f,nucleon1i,nucleon2i,itoverin=[2])
+    # createfilesfunc('PIFTmag_2B',nucleon1f,nucleon2f,nucleon1i,nucleon2i,itoverin=[1,3])
+    createfilesfunc('SGTel_2B',nucleon1f,nucleon2f,nucleon1i,nucleon2i,itoverin=[2,4])
+    createfilesfunc('SGTmag_2B',nucleon1f,nucleon2f,nucleon1i,nucleon2i,itoverin=[1,3,5])
+    createfilesfunc('SGL_2B',nucleon1f,nucleon2f,nucleon1i,nucleon2i,itoverin=[2,4])
     print('succesfull')
 
+mud = s1f+s2f-s1i-s2i
+createfilesfunc('SGTmag_2B',nucleon1f,nucleon2f,nucleon1i,nucleon2i,itoverin=[1,3])
 
-t1i=t1f=-1
-t2i=t2f=1
-s1i=s1f=-1
-for s2i in [1,-1]:
-    for s2f in [1,-1]:
-        for l1i in [0,1]:
-            for l1f in [0,1]:
-                for l2i in [0,1]:
-                    for l2f in [0,1]:
-                        n1i=n2i=n1f=n2f=0
-                        m1i=m2i=m1f=m2f=0
-                        nucleon1i = [n1i,l1i,m1i,s1i,t1i] 
-                        nucleon1f = [n1f,l1f,m1f,s1f,t1f] 
-                        nucleon2i = [n2i,l2i,m2i,s2i,t2i] 
-                        nucleon2f = [n2f,l2f,m2f,s2f,t2f]         
-                        mud = s1f+s2f-s1i-s2i
-                        qnumbers="_s1is1fs2is2f"+str(s1i)+str(s1f)+str(s2i)+str(s2f)+"_n1il1im1i-"+str(n1i)+str(l1i)+str(m1i)+"_n1fl1fm1f-"+str(n1f)+str(l1f)+str(m1f)+"_n2il2im2i-"+str(n2i)+str(l2i)+str(m2i)+"_n2fl2fm2f-"+str(n2f)+str(l2f)+str(m2f)
-                        createallsimultfunc(nucleon1f,nucleon2f,nucleon1i,nucleon2i)
+# t1i=t1f=-1
+# t2i=t2f=1
+# s1i=s1f=1
+# for s2i in [1,-1]:
+#     for s2f in [1,-1]:
+#         for l1i in [0,1]:
+#             for l1f in [0,1]:
+#                 for l2i in [0,1]:
+#                     for l2f in [0,1]:
+#                         n1i=n2i=n1f=n2f=0
+#                         m1i=m2i=m1f=m2f=0
+#                         nucleon1i = [n1i,l1i,m1i,s1i,t1i] 
+#                         nucleon1f = [n1f,l1f,m1f,s1f,t1f] 
+#                         nucleon2i = [n2i,l2i,m2i,s2i,t2i] 
+#                         nucleon2f = [n2f,l2f,m2f,s2f,t2f]         
+#                         mud = s1f+s2f-s1i-s2i
+#                         qnumbers="_s1is1fs2is2f"+str(s1i)+str(s1f)+str(s2i)+str(s2f)+"_n1il1im1i-"+str(n1i)+str(l1i)+str(m1i)+"_n1fl1fm1f-"+str(n1f)+str(l1f)+str(m1f)+"_n2il2im2i-"+str(n2i)+str(l2i)+str(m2i)+"_n2fl2fm2f-"+str(n2f)+str(l2f)+str(m2f)
+#                         createallsimultfunc(nucleon1f,nucleon2f,nucleon1i,nucleon2i)
 
 # s1i=s1f=1
 # for s2i in [1,-1]:
