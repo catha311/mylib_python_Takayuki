@@ -56,3 +56,5 @@ def main():
     ms.print_modelspace_summary()
 if(__name__=="__main__"):
     main()
+
+ms=ModelSpace()

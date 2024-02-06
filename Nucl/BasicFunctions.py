@@ -90,7 +90,7 @@ def VecYLM(Q,L,M):
     \vec{Y}_{LM}(\hat{\vec{Q}})
     """
     Ql, theta_Q, phi_Q = get_spherical(Q)
-    if(M > L): return np.zeros(3,dtype=np.complex)
+    if(M > L): return np.zeros(3,dtype=np.complex_)
     return Ylm(L,M,theta_Q,phi_Q) * Q / Ql
 
 def VecPsi(Q,L,M):
@@ -98,13 +98,13 @@ def VecPsi(Q,L,M):
     \vec{\Psi}_{LM}(\hat{\vec{Q}})
     """
     Ql, theta_Q, phi_Q = get_spherical(Q)
-    Psi = np.zeros(3,dtype=np.complex)
+    Psi = np.zeros(3,dtype=np.complex_)
     for lam in [-1,0,1]:
         if(abs(M-lam)>L-1): continue
-        Psi += np.float(clebsch_gordan(L-1,1,L,M-lam,lam,M).evalf()) * Ylm(L-1,M-lam,theta_Q,phi_Q) * e_sph(lam) * np.sqrt(L+1)
+        Psi += np.float32(clebsch_gordan(L-1,1,L,M-lam,lam,M).evalf()) * Ylm(L-1,M-lam,theta_Q,phi_Q) * e_sph(lam) * np.sqrt(L+1)
     for lam in [-1,0,1]:
         if(abs(M-lam)>L+1): continue
-        Psi += np.float(clebsch_gordan(L+1,1,L,M-lam,lam,M).evalf()) * Ylm(L+1,M-lam,theta_Q,phi_Q) * e_sph(lam) * np.sqrt(L)
+        Psi += np.float32(clebsch_gordan(L+1,1,L,M-lam,lam,M).evalf()) * Ylm(L+1,M-lam,theta_Q,phi_Q) * e_sph(lam) * np.sqrt(L)
     Psi *= np.sqrt(1/(2*L+1))
     return Psi
 
@@ -113,10 +113,10 @@ def VecPhi(Q,L,M):
     \vec{\Phi}_{LM}(\hat{\vec{Q}})
     """
     Ql, theta_Q, phi_Q = get_spherical(Q)
-    Phi = np.zeros(3,dtype=np.complex)
+    Phi = np.zeros(3,dtype=np.complex_)
     for lam in [-1,0,1]:
         if(abs(M-lam)>L): continue
-        Phi += np.float(clebsch_gordan(L,1,L,M-lam,lam,M).evalf()) * Ylm(L,M-lam,theta_Q,phi_Q) * e_sph(lam)
+        Phi += np.float32(clebsch_gordan(L,1,L,M-lam,lam,M).evalf()) * Ylm(L,M-lam,theta_Q,phi_Q) * e_sph(lam)
     return Phi
 
 if(__name__=="__main__"):

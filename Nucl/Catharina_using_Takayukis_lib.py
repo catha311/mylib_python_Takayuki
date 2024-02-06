@@ -1,30 +1,77 @@
-import os
-import sys
+if(__package__==None or __package__==""):
+    from Orbits import Orbits, OrbitsIsospin
+    import TwoBodySpace
+    import ThreeBodySpace
+else:
+    from . import Orbits, OrbitsIsospin
+    from . import TwoBodySpace
+    from . import ThreeBodySpace
+
+class ModelSpace:
+    def __init__(self, rank=2):
+        self.orbits = None
+        self.iorbits = None
+        self.two = None
+        self.three = None
+        self.rank = rank
+        self.emax = -1
+        self.e2max = -1
+        self.e3max = -1
+    def set_modelspace_from_boundaries( self, emax, e2max=None, e3max=None ):
+        self.emax = emax
+        self.e2max = e2max
+        self.e3max = e3max
+        if(e2max == None): self.e2max=2*self.emax
+        if(e3max == None): self.e3max=3*self.emax
+        if( self.rank==1 ): self.e2max=-1
+        if( self.rank==1 ): self.e3max=-1
+        self.orbits = Orbits( emax=emax )
+        if(self.rank>=2): self.two = TwoBodySpace.TwoBodySpace( orbits=self.orbits, e2max=e2max )
+        if(self.rank>=3): self.iorbits = OrbitsIsospin(emax=emax)
+        if(self.rank>=3): self.three = ThreeBodySpace.ThreeBodySpace( orbits=self.iorbits, e2max=e2max, e3max=e3max )
+    def set_modelspace_from_orbits(self, orbits, e2max=None, e3max=None, iorbits=None):
+        self.orbits = copy.deepcopy(orbits)
+        self.emax = self.orbits.emax
+        self.e2max = e2max
+        self.e3max = e3max
+        if( self.e2max == None ): self.e2max=2*orbits.emax
+        if( self.e3max == None ): self.e3max=3*orbits.emax
+        if( self.rank==1 ): self.e2max=-1
+        if( self.rank==1 ): self.e3max=-1
+        if(self.rank>=2): self.two = TwoBodySpace.TwoBodySpace( orbits=self.orbits, e2max=e2max )
+        if(self.rank>=3 and iorbits!=None): self.iorbits = copy.deepcopy(iorbits)
+        if(self.rank>=3 and iorbits!=None): self.three = ThreeBodySpace.ThreeBodySpace( orbits=self.iorbits, e2max=e2max, e3max=e3max )
+    def print_modelspace_summary(self):
+        self.orbits.print_orbits()
+        if(self.rank>=2): self.two.print_channels()
+        if(self.rank>=3): self.iorbits.print_orbits()
+        if(self.rank>=3): self.three.print_channels()
+
+
+
+import sys, os, subprocess, itertools, math
+import numpy as np
+import functools
+import copy
+import gzip
+from scipy.constants import physical_constants
+from scipy.special import gamma
+from sympy.physics.wigner import wigner_3j, wigner_6j, wigner_9j, clebsch_gordan
+import pandas as pd
+if(__package__==None or __package__==""):
+    from Orbits import Orbits, OrbitsIsospin
+    # import ModelSpace
+    import nushell2snt
+    import BasicFunctions
+else:
+    from . import Orbits, OrbitsIsospin, nushell2snt,BasicFunctions
+    from . import nushell2snt
+    from . import BasicFunctions
 
 HOME = os.path.expanduser("~")
 sys.path.append(HOME)
-import copy
-import gzip
-import itertools
-import math
-import os
-import subprocess
-#!/usr/bin/env python3
-import sys
 
-import numpy as np
-import pandas as pd
-from scipy.constants import physical_constants
-from scipy.special import gamma
-from sympy.physics.quantum.cg import CG
-from sympy.physics.wigner import wigner_3j, wigner_6j, wigner_9j
 
-if(__package__==None or __package__==""):
-    import ModelSpace
-    import nushell2snt
-    from Orbits import Orbits, OrbitsIsospin
-else:
-    from . import ModelSpace, Orbits, OrbitsIsospin, nushell2snt
 
 def _ls_coupling(la, ja, lb, jb, Lab, Sab, J):
     return np.sqrt( (2*ja+1)*(2*jb+1)*(2*Lab+1)*(2*Sab+1) ) * \
@@ -35,10 +82,30 @@ def _ljidx_to_lj(lj):
 
 def _lj_to_ljidx(l,j):
     return math.floor(l+j/2-1/2)
+_paulix = np.array([[0,1],[1,0]])
+_pauliy = np.array([[0,-1j],[1j,0]])
+_pauliz = np.array([[1,0],[0,-1]])
+@functools.lru_cache(maxsize=None)
+def _sixj(j1, j2, j3, j4, j5, j6):
+    return float(wigner_6j(j1, j2, j3, j4, j5, j6))
+@functools.lru_cache(maxsize=None)
+def _ninej(j1, j2, j3, j4, j5, j6, j7, j8, j9):
+    return float(wigner_9j(j1, j2, j3, j4, j5, j6, j7, j8, j9))
+@functools.lru_cache(maxsize=None)
+def _clebsch_gordan(j1, j2, j3, m1, m2, m3):
+    return float(clebsch_gordan(j1, j2, j3, m1, m2, m3))
+def _ls_coupling(la, ja, lb, jb, Lab, Sab, J):
+    return np.sqrt( (2*ja+1)*(2*jb+1)*(2*Lab+1)*(2*Sab+1) ) * \
+            np.float( wigner_9j( la, 0.5, ja, lb, 0.5, jb, Lab, Sab, J) )
 
+def _ljidx_to_lj(lj):
+    return math.floor((lj+1)/2), math.floor(2*(int(lj/2) + 1/2))
+
+def _lj_to_ljidx(l,j):
+    return math.floor(l+j/2-1/2)
 
 class Operator:
-    def __init__(self, rankJ=0, rankP=1, rankZ=0, ms=None, reduced=True, filename=None, verbose=False, comment="!", p_core=None, n_core=None):
+    def __init__(self, rankJ=0, rankP=1, rankZ=0, ms=None, reduced=True, filename=None, verbose=False, comment="!", p_core=None, n_core=None, skew=False):
         self.ms = ms
         self.rankJ = rankJ
         self.rankP = rankP
@@ -54,6 +121,7 @@ class Operator:
         self.kshell_options = []
         self.ls_couple_store = {}
         self.sixj_store = {}
+        self.skew = skew
         if( self.rankJ == 0 and self.rankP==1 and self.rankZ==0): self.reduced = False
         if( ms != None ): self.allocate_operator( ms )
         if( filename != None ): self.read_operator_file( filename, comment=comment )
@@ -78,7 +146,9 @@ class Operator:
         if(self.rankP != other.rankP): raise ValueError
         if(self.rankZ != other.rankZ): raise ValueError
         if(self.reduced != other.reduced): raise ValueError
-        target = Operator(ms=self.ms, rankJ=self.rankJ, rankP=self.rankP, rankZ=self.rankZ, reduced=self.reduced, p_core=self.p_core, n_core=self.n_core)
+        if(self.skew != other.skew): raise ValueError
+        target = Operator(ms=self.ms, rankJ=self.rankJ, rankP=self.rankP, rankZ=self.rankZ, reduced=self.reduced, \
+                p_core=self.p_core, n_core=self.n_core, skew=self.skew)
         target.zero = self.zero + other.zero
         target.one = self.one + other.one
         for channels in self.two.keys():
@@ -97,7 +167,9 @@ class Operator:
         if(self.rankP != other.rankP): raise ValueError
         if(self.rankZ != other.rankZ): raise ValueError
         if(self.reduced != other.reduced): raise ValueError
-        target = Operator(ms=self.ms, rankJ=self.rankJ, rankP=self.rankP, rankZ=self.rankZ, reduced=self.reduced, p_core=self.p_core, n_core=self.n_core)
+        if(self.skew != other.skew): raise ValueError
+        target = Operator(ms=self.ms, rankJ=self.rankJ, rankP=self.rankP, rankZ=self.rankZ, reduced=self.reduced, \
+                p_core=self.p_core, n_core=self.n_core, skew=self.skew)
         target.zero = self.zero - other.zero
         target.one = self.one - other.one
         for channels in self.two.keys():
@@ -112,7 +184,8 @@ class Operator:
         return target
 
     def __mul__(self, coef):
-        target = Operator(ms=self.ms, rankJ=self.rankJ, rankP=self.rankP, rankZ=self.rankZ, reduced=self.reduced, p_core=self.p_core, n_core=self.n_core)
+        target = Operator(ms=self.ms, rankJ=self.rankJ, rankP=self.rankP, rankZ=self.rankZ, reduced=self.reduced, \
+                p_core=self.p_core, n_core=self.n_core, skew=self.skew)
         target.zero = self.zero * coef
         target.one = self.one * coef
         for channels in self.two.keys():
@@ -193,6 +266,7 @@ class Operator:
                 if( chbra.P * chket.P * self.rankP != 1): continue
                 if( self._triag( chbra.T, chket.T, 2*self.rankZ )): continue
                 self.three[(ichbra,ichket)] = {}
+
     def count_nonzero_1bme(self):
         counter = 0
         norbs = self.ms.orbits.get_num_orbits()
@@ -200,6 +274,7 @@ class Operator:
             for j in range(norbs):
                 if( abs( self.one[i,j] ) > 1.e-16 ): counter += 1
         return counter
+
     def count_nonzero_2bme(self):
         counter = 0
         two = self.ms.two
@@ -213,6 +288,7 @@ class Operator:
                 if( abs(chbra.Z-chket.Z) != self.rankZ): continue
                 counter += len( self.two[(i,j)] )
         return counter
+
     def count_nonzero_3bme(self):
         counter = 0
         three = self.ms.three
@@ -226,8 +302,10 @@ class Operator:
                 if( chbra.P * chket.P * self.rankP != 1): continue
                 counter += len( self.three[(i,j)] )
         return counter
+
     def set_0bme( self, me ):
         self.zero = me
+
     def set_1bme( self, a, b, me):
         orbits = self.ms.orbits
         oa = orbits.get_orbit(a)
@@ -235,14 +313,20 @@ class Operator:
         if( self._triag(oa.j, ob.j, 2*self.rankJ)): raise ValueError("Operator rank mismatch")
         if( (-1)**(oa.l+ob.l) * self.rankP != 1): raise ValueError("Operator parity mismatch")
         if( abs(oa.z-ob.z) != 2*self.rankZ): raise ValueError("Operator pn mismatch")
+        if(self.skew and a==b and abs(me) > 1.e-16): raise ValueError("Diagonal matrix element has to be 0")
         self.one[a-1,b-1] = me
         self.one[b-1,a-1] = me * (-1)**( (ob.j-oa.j)//2 )
+        if(self.skew): self.one[b-1,a-1] *= -1
+
     def set_2bme_from_mat_indices( self, chbra, chket, bra, ket, me ):
+        if(self.skew and chbra==chket and bra==ket and abs(me) > 1.e-16): raise ValueError("Diagonal matrix element has to be 0")
         if( chbra < chket ):
             if(self.verbose): print("Warning:" + sys._getframe().f_code.co_name )
             return
         self.two[(chbra,chket)][(bra,ket)] = me
-        if( chbra == chket ): self.two[(chbra,chket)][(ket,bra)] = me
+        if( chbra == chket and self.skew): self.two[(chbra,chket)][(ket,bra)] = -me
+        if( chbra == chket and not self.skew): self.two[(chbra,chket)][(ket,bra)] = me
+
     def set_2bme_from_indices( self, a, b, c, d, Jab, Jcd, me ):
         two = self.ms.two
         orbits = two.orbits
@@ -257,17 +341,15 @@ class Operator:
         if( self._triag( Jab, Jcd, self.rankJ )): raise ValueError("Operator rank mismatch")
         if( Pab * Pcd * self.rankP != 1): raise ValueError("Operator parity mismatch")
         if( abs(Zab-Zcd) != self.rankZ): raise ValueError("Operator pn mismatch")
-        ichbra_tmp = two.get_index(Jab,Pab,Zab)
-        ichket_tmp = two.get_index(Jcd,Pcd,Zcd)
+        ichbra = two.get_index(Jab,Pab,Zab)
+        ichket = two.get_index(Jcd,Pcd,Zcd)
         phase = 1
-        if( ichbra_tmp >= ichket_tmp ):
-            ichbra = ichbra_tmp
-            ichket = ichket_tmp
+        if( ichbra >= ichket ):
             aa, bb, cc, dd, = a, b, c, d
         else:
-            ichbra = ichket_tmp
-            ichket = ichbra_tmp
+            ichbra, ichket = ichket, ichbra
             phase *=  (-1)**(Jcd-Jab)
+            if(self.skew): phase *= -1
             aa, bb, cc, dd, = c, d, a, b
         chbra = two.get_channel(ichbra)
         chket = two.get_channel(ichket)
@@ -275,6 +357,7 @@ class Operator:
         ket = chket.index_from_indices[(cc,dd)]
         phase *= chbra.phase_from_indices[(aa,bb)] * chket.phase_from_indices[(cc,dd)]
         self.set_2bme_from_mat_indices(ichbra,ichket,bra,ket,me*phase)
+
     def set_2bme_from_orbits( self, oa, ob, oc, od, Jab, Jcd, me ):
         orbits = self.ms.orbits
         a = orbits.orbit_index_from_orbit( oa )
@@ -282,12 +365,16 @@ class Operator:
         c = orbits.orbit_index_from_orbit( oc )
         d = orbits.orbit_index_from_orbit( od )
         self.set_2bme_from_indices( a, b, c, d, Jab, Jcd, me )
+
     def set_3bme_from_mat_indices( self, chbra, chket, bra, ket, me ):
+        if(self.skew and chbra==chket and bra==ket and abs(me) > 1.e-16): raise ValueError("Diagonal matrix element has to be 0")
         if( chbra < chket ):
             if(self.verbose): print("Warning:" + sys._getframe().f_code.co_name )
             return
         self.three[(chbra,chket)][(bra,ket)] = me
-        if( chbra == chket ): self.three[(chbra,chket)][ket,bra] = me
+        if(chbra == chket and self.skew): self.three[(chbra,chket)][ket,bra] = -me
+        if(chbra == chket and not self.skew): self.three[(chbra,chket)][ket,bra] = me
+
     def set_3bme_from_indices( self, a, b, c, Jab, Tab, d, e, f, Jde, Tde, Jbra, Tbra, Jket, Tket, me ):
         three = self.ms.three
         iorbits = three.orbits
@@ -334,17 +421,14 @@ class Operator:
         if( self._triag( Tbra, Tket, 2*self.rankZ) ):
             if(self.verbose): print("Warning: Z, " + sys._getframe().f_code.co_name )
             return
-        ichbra_tmp = three.get_index(Jbra,Pbra,Tbra)
-        ichket_tmp = three.get_index(Jket,Pket,Tket)
+        ichbra = three.get_index(Jbra,Pbra,Tbra)
+        ichket = three.get_index(Jket,Pket,Tket)
         phase = 1
-        if( ichbra_tmp >= ichket_tmp ):
-            ichbra = ichbra_tmp
-            ichket = ichket_tmp
+        if( ichbra >= ichket ):
             i, j, k, l, m, n = a, b, c, d, e, f
             Jij, Tij, Jlm, Tlm = Jab, Tab, Jde, Tde
         else:
-            ichbra = ichket_tmp
-            ichket = ichbra_tmp
+            ichbra, ichket = ichket, ichbra
             phase *=  (-1)**((Jket+Tket-Jbra-Tbra)//2)
             i, j, k, l, m, n = d, e, f, a, b, c
             Jij, Tij, Jlm, Tlm = Jde, Tde, Jab, Tab
@@ -356,8 +440,37 @@ class Operator:
 
     def get_0bme(self):
         return self.zero
+
     def get_1bme(self,a,b):
         return self.one[a-1,b-1]
+
+    def get_1bme_Mscheme(self, p, mdp, q, mdq):
+        if(not self.reduced):
+            print('Convert matrix elements to reduced one first')
+            return None
+        orbs = self.ms.orbits
+        o_p, o_q = orbs.get_orbit(p), orbs.get_orbit(q)
+        me = _clebsch_gordan(o_q.j*0.5, self.rankJ, o_p.j*0.5, mdq*0.5, (mdp-mdq)*0.5, mdp*0.5) / np.sqrt(o_p.j+1) * self.get_1bme(p, q)
+        return me
+
+    def get_1bme_Mscheme_nlms(self, nlmstz1, nlmstz2):
+        if(not self.reduced):
+            print('Convert matrix elements to reduced one first')
+            return None
+        orbs = self.ms.orbits
+        n1, l1, ml1, s1d, tz1d = nlmstz1
+        n2, l2, ml2, s2d, tz2d = nlmstz2
+        m1d = 2*ml1 + s1d
+        m2d = 2*ml2 + s2d
+        me = 0.0
+        for j1d, j2d in itertools.product(range(abs(2*l1-1),2*l1+3,2), range(abs(2*l2-1),2*l2+3,2)):
+            coef =  _clebsch_gordan(l1, 0.5, j1d*0.5, ml1, s1d*0.5, m1d*0.5) * \
+                    _clebsch_gordan(l2, 0.5, j2d*0.5, ml2, s2d*0.5, m2d*0.5)
+            i1 = orbs.get_orbit_index(n1, l1, j1d, tz1d)
+            i2 = orbs.get_orbit_index(n2, l2, j2d, tz2d)
+            me += self.get_1bme_Mscheme(i1, m1d, i2, m2d) * coef
+        return me
+
     def get_2bme_from_mat_indices(self,chbra,chket,bra,ket):
         if( chbra < chket ):
             if(self.verbose): print("Warning:" + sys._getframe().f_code.co_name )
@@ -367,6 +480,7 @@ class Operator:
         except:
             if(self.verbose): print("Nothing here " + sys._getframe().f_code.co_name )
             return 0
+
     def get_2bme_from_indices( self, a, b, c, d, Jab, Jcd ):
         if(self.ms.rank <= 1): return 0
         two = self.ms.two
@@ -389,20 +503,18 @@ class Operator:
             if(self.verbose): print("Operator pn mismatch: return 0")
             return 0.0
         try:
-            ichbra_tmp = two.get_index(Jab,Pab,Zab)
-            ichket_tmp = two.get_index(Jcd,Pcd,Zcd)
+            ichbra = two.get_index(Jab,Pab,Zab)
+            ichket = two.get_index(Jcd,Pcd,Zcd)
         except:
             if(self.verbose): print("Warning: channel bra & ket index, " + sys._getframe().f_code.co_name )
             return 0.0
         phase = 1
-        if( ichbra_tmp >= ichket_tmp ):
-            ichbra = ichbra_tmp
-            ichket = ichket_tmp
+        if( ichbra >= ichket ):
             aa, bb, cc, dd, = a, b, c, d
         else:
-            ichbra = ichket_tmp
-            ichket = ichbra_tmp
+            ichbra, ichket = ichket, ichbra
             phase *=  (-1)**(Jcd-Jab)
+            if(self.skew): phase *= -1
             aa, bb, cc, dd, = c, d, a, b
         chbra = two.get_channel(ichbra)
         chket = two.get_channel(ichket)
@@ -414,6 +526,7 @@ class Operator:
             return 0.0
         phase *= chbra.phase_from_indices[(aa,bb)] * chket.phase_from_indices[(cc,dd)]
         return self.get_2bme_from_mat_indices(ichbra,ichket,bra,ket)*phase
+
     def get_2bme_from_orbits( self, oa, ob, oc, od, Jab, Jcd ):
         if(self.ms.rank <= 1): return 0.0
         orbits = self.ms.orbits
@@ -422,6 +535,7 @@ class Operator:
         c = orbits.orbit_index_from_orbit( oc )
         d = orbits.orbit_index_from_orbit( od )
         return self.get_2bme_from_indices( a, b, c, d, Jab, Jcd )
+
     def get_2bme_monopole(self, a, b, c, d):
         if(self.ms.rank <= 1): return 0.0
         norm = 1.0
@@ -443,12 +557,12 @@ class Operator:
             sumJ += (2*J+1)
         return sumV / sumJ * norm
 
-
     def get_3bme_from_mat_indices( self, chbra, chket, bra, ket ):
         if( chbra < chket ):
             if(self.verbose): print("Warning:" + sys._getframe().f_code.co_name )
             return
         return self.three[(chbra,chket)][(bra,ket)]
+
     def get_3bme_from_indices( self, a, b, c, Jab, Tab, d, e, f, Jde, Tde, Jbra, Tbra, Jket, Tket ):
         three = self.ms.three
         iorbits = three.orbits
@@ -471,18 +585,14 @@ class Operator:
         if( self._triag( Tbra, Tket, 2*self.rankZ) ):
             if(self.verbose): print("Warning: Z, " + sys._getframe().f_code.co_name )
             return
-        ichbra_tmp = three.get_index(Jbra,Pbra,Tbra)
-        ichket_tmp = three.get_index(Jket,Pket,Tket)
+        ichbra = three.get_index(Jbra,Pbra,Tbra)
+        ichket = three.get_index(Jket,Pket,Tket)
         phase = 1
-        if( ichbra_tmp >= ichket_tmp ):
-            ichbra = ichbra_tmp
-            ichket = ichket_tmp
+        if( ichbra >= ichket ):
             i, j, k, l, m, n = a, b, c, d, e, f
             Jij, Tij, Jlm, Tlm = Jab, Tab, Jde, Tde
         else:
-            print("flip")
-            ichbra = ichket_tmp
-            ichket = ichbra_tmp
+            ichbra, ichket = ichket, ichbra
             phase *=  (-1)**((Jket+Tket-Jbra-Tbra)//2)
             i, j, k, l, m, n = d, e, f, a, b, c
             Jij, Tij, Jlm, Tlm = Jde, Tde, Jab, Tab
@@ -637,7 +747,7 @@ class Operator:
             data = line.split()
             idx, n, l, j, z = int(data[0]), int(data[1]), int(data[2]), int(data[3]), int(data[4])
             orbs.add_orbit(n,l,j,z)
-        ms = ModelSpace.ModelSpace()
+        ms = ModelSpace()
         ms.set_modelspace_from_orbits( orbs )
         self.allocate_operator( ms )
         self.set_0bme( zerobody )
@@ -1418,10 +1528,10 @@ class Operator:
             if(a==b): me /= np.sqrt(2.0)
             if(c==d): me /= np.sqrt(2.0)
             return me
-        if(b==d): me += self.get_1bme(a,c) * (-1.0)**( (oa.j+ob.j)//2 + Jcd     ) * N( wigner_6j(Jab,Jcd,lam,oc.j*0.5,oa.j*0.5,ob.j*0.5) )
-        if(a==c): me += self.get_1bme(b,d) * (-1.0)**( (oc.j+od.j)//2 - Jab     ) * N( wigner_6j(Jab,Jcd,lam,od.j*0.5,ob.j*0.5,oa.j*0.5) )
-        if(b==c): me -= self.get_1bme(a,d) * (-1.0)**( (oa.j+ob.j+oc.j+od.j)//2 ) * N( wigner_6j(Jab,Jcd,lam,od.j*0.5,oa.j*0.5,ob.j*0.5) )
-        if(a==d): me -= self.get_1bme(b,c) * (-1.0)**( Jcd - Jab                ) * N( wigner_6j(Jab,Jcd,lam,oc.j*0.5,ob.j*0.5,oa.j*0.5) )
+        if(b==d): me += self.get_1bme(a,c) * (-1.0)**( (oa.j+ob.j)//2 + Jcd     ) * _sixj(Jab,Jcd,lam,oc.j*0.5,oa.j*0.5,ob.j*0.5)
+        if(a==c): me += self.get_1bme(b,d) * (-1.0)**( (oc.j+od.j)//2 - Jab     ) * _sixj(Jab,Jcd,lam,od.j*0.5,ob.j*0.5,oa.j*0.5)
+        if(b==c): me -= self.get_1bme(a,d) * (-1.0)**( (oa.j+ob.j+oc.j+od.j)//2 ) * _sixj(Jab,Jcd,lam,od.j*0.5,oa.j*0.5,ob.j*0.5)
+        if(a==d): me -= self.get_1bme(b,c) * (-1.0)**( Jcd - Jab                ) * _sixj(Jab,Jcd,lam,oc.j*0.5,ob.j*0.5,oa.j*0.5)
         me *= np.sqrt( (2*Jab+1)*(2*Jcd+1) ) * (-1.0)**lam
         if(a==b): me /= np.sqrt(2.0)
         if(c==d): me /= np.sqrt(2.0)
@@ -1562,9 +1672,9 @@ class Operator:
                 Mrs = (mdr + mds)//2
                 if(abs(Mrs) > Jrs): continue
                 if(not abs(Jpq-Jrs) <= self.rankJ <= Jpq+Jrs): continue
-                me += float(CG(o_p.j*0.5, mdp*0.5, o_q.j*0.5, mdq*0.5, Jpq, Mpq).doit()) * \
-                        float(CG(o_r.j*0.5, mdr*0.5, o_s.j*0.5, mds*0.5, Jrs, Mrs).doit()) * \
-                        float(CG(Jrs, Mrs, self.rankJ, mud*0.5, Jpq, Mpq).doit()) / np.sqrt(2*Jpq+1) * \
+                me += _clebsch_gordan(o_p.j*0.5, o_q.j*0.5, Jpq, mdp*0.5, mdq*0.5, Mpq) * \
+                        _clebsch_gordan(o_r.j*0.5, o_s.j*0.5, Jrs, mdr*0.5, mds*0.5, Mrs) * \
+                        _clebsch_gordan(Jrs, self.rankJ, Jpq, Mrs, mud*0.5, Mpq) / np.sqrt(2*Jpq+1) * \
                         self.get_2bme_from_indices(p, q, r, s, Jpq, Jrs)
         me *= norm
         return me
@@ -1584,16 +1694,46 @@ class Operator:
         m4d = 2*ml4 + s4d
         me = 0.0
         for j1d, j2d, j3d, j4d in itertools.product(range(abs(2*l1-1),2*l1+3,2), range(abs(2*l2-1),2*l2+3,2), range(abs(2*l3-1),2*l3+3,2), range(abs(2*l4-1),2*l4+3,2)):
-            coef = float(CG(l1, ml1, 0.5, s1d*0.5, j1d*0.5, m1d*0.5).doit()) * \
-                    float(CG(l2, ml2, 0.5, s2d*0.5, j2d*0.5, m2d*0.5).doit()) * \
-                    float(CG(l3, ml3, 0.5, s3d*0.5, j3d*0.5, m3d*0.5).doit()) * \
-                    float(CG(l4, ml4, 0.5, s4d*0.5, j4d*0.5, m4d*0.5).doit())
+            coef =  _clebsch_gordan(l1, 0.5, j1d*0.5, ml1, s1d*0.5, m1d*0.5) * \
+                    _clebsch_gordan(l2, 0.5, j2d*0.5, ml2, s2d*0.5, m2d*0.5) * \
+                    _clebsch_gordan(l3, 0.5, j3d*0.5, ml3, s3d*0.5, m3d*0.5) * \
+                    _clebsch_gordan(l4, 0.5, j4d*0.5, ml4, s4d*0.5, m4d*0.5)
             i1 = orbs.get_orbit_index(n1, l1, j1d, tz1d)
             i2 = orbs.get_orbit_index(n2, l2, j2d, tz2d)
             i3 = orbs.get_orbit_index(n3, l3, j3d, tz3d)
             i4 = orbs.get_orbit_index(n4, l4, j4d, tz4d)
+#            print(i1,i2,i3,i4,self.get_2bme_Mscheme(i1, m1d, i2, m2d, i3, m3d, i4, m4d, mud),coef)
             me += self.get_2bme_Mscheme(i1, m1d, i2, m2d, i3, m3d, i4, m4d, mud) * coef
         return me
+
+    def get_2bme_from_Mscheme(self, a, b, c, d, Jab, Jcd):
+        orbits = self.ms.orbits
+        oa, ob, oc, od = orbits.get_orbit(a), orbits.get_orbit(b), orbits.get_orbit(c), orbits.get_orbit(d)
+        me = 0.0
+        Mab, Mcd = 0, 0
+        if(abs(_clebsch_gordan(Jcd, self.rankJ, Jab, Mcd, Mab-Mcd, Mab)) < 1.e-8):
+            Mab, Mcd = Jab, Jcd
+        norm = 1
+        if(a==b): norm /= np.sqrt(2)
+        if(c==d): norm /= np.sqrt(2)
+        for mda, mdb, mdc, mdd in itertools.product(range(-oa.j, oa.j+2, 2), range(-ob.j, ob.j+2, 2), range(-oc.j, oc.j+2, 2), range(-od.j, od.j+2, 2)):
+            if((mda + mdb)//2 != Mab): continue
+            if((mdc + mdd)//2 != Mcd): continue
+            for sa, sb, sc, sd in itertools.product([-1,1], repeat=4):
+                mla, mlb, mlc, mld = (mda - sa)//2, (mdb - sb)//2, (mdc - sc)//2, (mdd - sd)//2
+                coef =  _clebsch_gordan(oa.l, 0.5, oa.j*0.5, mla, sa*0.5, mda*0.5) * \
+                        _clebsch_gordan(ob.l, 0.5, ob.j*0.5, mlb, sb*0.5, mdb*0.5) * \
+                        _clebsch_gordan(oc.l, 0.5, oc.j*0.5, mlc, sc*0.5, mdc*0.5) * \
+                        _clebsch_gordan(od.l, 0.5, od.j*0.5, mld, sd*0.5, mdd*0.5) * \
+                        _clebsch_gordan(oa.j*0.5, ob.j*0.5, Jab, mda*0.5, mdb*0.5, Mab) * \
+                        _clebsch_gordan(oc.j*0.5, od.j*0.5, Jcd, mdc*0.5, mdd*0.5, Mcd) * \
+                        np.sqrt(2*Jab+1) / _clebsch_gordan(Jcd, self.rankJ, Jab, Mcd, Mab-Mcd, Mab)
+                aa = [oa.n, oa.l, mla, sa, oa.z]
+                bb = [ob.n, ob.l, mlb, sb, ob.z]
+                cc = [oc.n, oc.l, mlc, sc, oc.z]
+                dd = [od.n, od.l, mld, sd, od.z]
+                me += coef * self.get_2bme_Mscheme_nlms(aa, bb, cc, dd, 2*(Mab-Mcd))
+        return me*norm
 
     def compare_operators(self, op, ax):
         orbs = self.ms.orbits
@@ -1751,7 +1891,7 @@ class Operator:
 
     def set_fermi_op(self):
         """
-        set < p || 1 || q > < p or n| tau_+/- | n or p > = \sqrt{(2j_p+1)} 
+        set < p || 1 || q > < p or n| tau_+/- | n or p > = \sqrt{(2j_p+1)}
         """
         if(self.rankJ != 0): raise ValueError
         if(self.rankP != 1): raise ValueError
@@ -1768,6 +1908,24 @@ class Operator:
                 if(op.j != oq.j): continue
                 self.set_1bme(p,q,np.sqrt((op.j+1)))
         self.reduced=True
+
+    def set_rp4(self, hw):
+        if(self.rankJ != 0): raise ValueError
+        if(self.rankP != 1): raise ValueError
+        if(self.rankZ != 0): raise ValueError
+        self.allocate_operator(self.ms)
+        orbits = self.ms.orbits
+        for p in range(1,orbits.get_num_orbits()+1):
+            for q in range(p,orbits.get_num_orbits()+1):
+                op = orbits.get_orbit(p)
+                oq = orbits.get_orbit(q)
+                if(op.z != oq.z): continue
+                if(op.l != oq.l): continue
+                if(op.j != oq.j): continue
+                me = BasicFunctions.RadialInt(op.n, op.l, oq.n, oq.l, hw, 4)
+                self.set_1bme(p,q,me)
+        self.reduced=False
+
 
     def set_double_fermi_op(self):
         """
@@ -1896,11 +2054,11 @@ class Operator:
                     me = me_sdi(oa, ob, oc, od, J)
                     me-= me_sdi(oa, ob, od, oc, J) * (-1)**((oc.j+od.j)/2 + J)
                     self.set_2bme_from_indices(a, b, c, d, J, J, me*norm)
-        
+
     def set_pairing(self, G):
         """
         Eq. (12.11) from J. Suhonen, From Nucleons to Nucleus, Vol. 23 (Springer Berlin Heidelberg, Berlin, Heidelberg, 2007).
-        <pp:0 | V | qq:0 > = -G sqrt([jp][jq]) / 2
+        <pp:0 | V | qq:0 > = G sqrt([jp][jq]) / 2
         """
         tbs = self.ms.two
         for tbc in tbs.channels:
@@ -1914,17 +2072,202 @@ class Operator:
                     if(c != d): continue
                     oa, ob = tbc.get_orbits(ibra)
                     oc, od = tbc.get_orbits(iket)
-                    me = -G * np.sqrt((oa.j+1)*(oc.j+1)) * 0.5
+                    me = G * np.sqrt((oa.j+1)*(oc.j+1)) * 0.5
                     self.set_2bme_from_indices(a, b, c, d, J, J, me)
 
+    def set_QQforce(self, H, hw):
+        """
+        Eq. (8.55) from J. Suhonen, From Nucleons to Nucleus, Vol. 23 (Springer Berlin Heidelberg, Berlin, Heidelberg, 2007).
+        """
+        E2 = Operator(rankJ=2, ms=self.ms)
+        E2.set_electric_op(hw, e_p=1.0, e_n=1.0)
+        orbits = self.ms.orbits
+        def me_NA(a,b,c,d,J):
+            oa, ob, oc, od = orbits.get_orbit(a), orbits.get_orbit(b), orbits.get_orbit(c), orbits.get_orbit(d)
+            me = (-1)**((oa.j + ob.j)/2+J) * float(wigner_6j(oa.j*0.5, ob.j*0.5, J, od.j*0.5, oc.j*0.5, 2)) * E2.get_1bme(c,a) * E2.get_1bme(b,d)
+            return me
+
+        tbs = self.ms.two
+        for tbc in tbs.channels:
+            J = tbc.J
+            for ibra in range(tbc.get_number_states()):
+                for iket in range(ibra+1):
+                    a, b = tbc.get_indices(ibra)
+                    c, d = tbc.get_indices(iket)
+                    oa, ob = tbc.get_orbits(ibra)
+                    oc, od = tbc.get_orbits(iket)
+                    norm = 1.0
+                    if(a==b): norm /= np.sqrt(2.0)
+                    if(c==d): norm /= np.sqrt(2.0)
+                    me = me_NA(a,b,c,d,J)
+                    me -= me_NA(a,b,d,c,J) * (-1.0)**((oc.j+od.j)/2+J)
+                    me *= norm * H
+                    self.set_2bme_from_indices(a, b, c, d, J, J, me)
+
+    def set_QdotQ(self, hw, e_p=1, e_n=0, full_space=True):
+        """
+        Similar to QQ force but it is O = [\sum_i Q_i x \sum_j Q_j]_0
+        """
+        E2 = Operator(rankJ=2, ms=self.ms)
+        E2.set_electric_op(hw, e_p=e_p, e_n=e_n)
+        orbits = self.ms.orbits
+        for op in orbits.orbits:
+            p = orbits.get_orbit_index_from_orbit(op)
+            for oq in orbits.orbits:
+                q = orbits.get_orbit_index_from_orbit(oq)
+                if(op.z != oq.z): continue
+                if(op.l != oq.l): continue
+                if(op.j != oq.j): continue
+                e = 0
+                if(op.z == -1): e = e_p
+                if(op.z ==  1): e = e_n
+                me = 0.0
+                if(full_space): me = BasicFunctions.RadialInt(op.n, op.l, oq.n, oq.l, hw, 4) * np.sqrt(5) / (4*np.pi) * e**2 # free-space
+                else:
+                    for o in orbits.orbits:
+                        i = orbits.get_orbit_index_from_orbit(o)
+                        me += (-1.0)**((o.j+op.j)//2+1) * E2.get_1bme(p,i) * E2.get_1bme(i,q) / float(op.j+1) / np.sqrt(5) # within the model space
+                self.set_1bme(p,q,me)
+
+        def me_NA(a,b,c,d,J):
+            oa, ob, oc, od = orbits.get_orbit(a), orbits.get_orbit(b), orbits.get_orbit(c), orbits.get_orbit(d)
+            me = (-1.0)**((ob.j + oc.j)//2+J) * float(wigner_6j(oa.j*0.5, ob.j*0.5, J, od.j*0.5, oc.j*0.5, 2)) * E2.get_1bme(a,c) * E2.get_1bme(b,d)
+            return me
+
+        tbs = self.ms.two
+        for tbc in tbs.channels:
+            J = tbc.J
+            for ibra in range(tbc.get_number_states()):
+                for iket in range(ibra+1):
+                    a, b = tbc.get_indices(ibra)
+                    c, d = tbc.get_indices(iket)
+                    oa, ob = tbc.get_orbits(ibra)
+                    oc, od = tbc.get_orbits(iket)
+                    norm = 1.0
+                    if(a==b): norm /= np.sqrt(2.0)
+                    if(c==d): norm /= np.sqrt(2.0)
+                    me = me_NA(a,b,c,d,J)
+                    me -= me_NA(a,b,d,c,J) * (-1.0)**((oc.j+od.j)//2+J)
+                    me *= norm * 2 / np.sqrt(5)
+                    self.set_2bme_from_indices(a, b, c, d, J, J, me)
+
+    def set_pairing_QQ(self, hw, g_p=0, g_QQ=0):
+        Hp, HQQ = Operator(ms=self.ms), Operator(ms=self.ms)
+        Hp.set_pairing(g_p)
+        HQQ.set_QQforce(g_QQ, hw)
+        tmp = Hp + HQQ
+        self.two = tmp.two
+
+    def mass_dependent_tbme(self, A):
+        mass_dep = 1
+        if(self.kshell_options[0]==1): mass_dep =(float(A) / float(self.kshell_options[1]))**float(self.kshell_options[2])
+        for channels in self.two:
+            ichbra, ichket = channels
+            chbra, chket = self.ms.two.get_channel(ichbra), self.ms.two.get_channel(ichket)
+            for ibra in range(chbra.get_number_states()):
+                for iket in range(chket.get_number_states()):
+                    try:
+                        self.two[channels][(ibra,iket)] *= mass_dep
+                    except:
+                        pass
+
+    def operator_ovlap(op1, op2, normalize=False):
+        def full_matrix_2body(op):
+            ms2 = op.ms.two
+            orbs = ms2.orbits
+            idxm_to_idx_m = {}
+            idx = 0
+            for o in orbs.orbits:
+                for m in range(-o.j, o.j+2, 2):
+                    idxm_to_idx_m[idx] = (orbs.get_orbit_index_from_orbit(o),m)
+                    idx += 1
+            ijlist = list(itertools.combinations_with_replacement(list(range(len(idxm_to_idx_m))),2))
+            mat = np.zeros((len(ijlist),len(ijlist)))
+            for ibra, ij in enumerate(ijlist):
+                for iket, kl in enumerate(ijlist):
+                    i, j = ij
+                    k, l = kl
+                    i_i, m_i = idxm_to_idx_m[i]
+                    i_j, m_j = idxm_to_idx_m[j]
+                    i_k, m_k = idxm_to_idx_m[k]
+                    i_l, m_l = idxm_to_idx_m[l]
+                    mat[ibra,iket] = op.get_2bme_Mscheme(i_i, m_i, i_j, m_j, i_k, m_k, i_l, m_l, m_i+m_j-m_k-m_l)
+            return mat
+
+        if(op1.rankJ != op2.rankJ): raise ValueError
+        if(op1.rankP != op2.rankP): raise ValueError
+        if(op1.rankZ != op2.rankZ): raise ValueError
+        op = op2.truncate(op1.ms)
+        if(not op.reduced): op.to_reduced()
+        if(not op1.reduced): op1.to_reduced()
+        if(normalize):
+            ovlp1 = np.trace(np.matmul(op1.one, op.one)) / np.sqrt(np.trace(np.matmul(op1.one, op1.one)) * np.trace(np.matmul(op.one, op.one)))
+        else:
+            ovlp1 = np.trace(np.matmul(op1.one, op.one))
+        mat1 = full_matrix_2body(op1)
+        mat2 = full_matrix_2body(op)
+        if(normalize):
+            ovlp2 = np.trace(np.matmul(mat1, mat2)) / np.sqrt(np.trace(np.matmul(mat1, mat1)) * np.trace(np.matmul(mat2, mat2)))
+        else:
+            ovlp2 = np.trace(np.matmul(mat1, mat2))
+        op.to_nonreduced()
+        op1.to_nonreduced()
+        return ovlp1, ovlp2
+
+    def set_tau1_x_tau2(self):
+        """
+        (tau1 x tau2) (sigma1 x sigma2) = - i(tau1 x tau2) i(sigma1 x sigma2)
+        """
+        tbs = self.ms.two
+        op2 = self.two
+        orbits = self.ms.orbits
+        def me_NA(a,b,c,d,Jab,Jcd):
+            oa, ob, oc, od = orbits.get_orbit(a), orbits.get_orbit(b), orbits.get_orbit(c), orbits.get_orbit(d)
+            if(oa.n != oc.n or oa.l != oc.l): return 0
+            if(ob.n != od.n or ob.l != od.l): return 0
+            i_a, i_b, i_c, i_d = (1-oa.z)//2, (1-ob.z)//2, (1-oc.z)//2, (1-od.z)//2
+            if(oa.z + ob.z - oc.z - od.z == 0):
+                me = _paulix[i_a,i_c] * _pauliy[i_b,i_d] - _pauliy[i_a,i_c] * _paulix[i_b,i_d]
+            if(oa.z + ob.z - oc.z - od.z == 2):
+                me = (_pauliy[i_a,i_c] * _pauliz[i_b,i_d] - _pauliz[i_a,i_c] * _pauliy[i_b,i_d]) + 1j * (_pauliz[i_a,i_c] * _paulix[i_b,i_d] - _paulix[i_a,i_c] * _pauliz[i_b,i_d])
+            if(oa.z + ob.z - oc.z - od.z ==-2):
+                me = (_pauliy[i_a,i_c] * _pauliz[i_b,i_d] - _pauliz[i_a,i_c] * _pauliy[i_b,i_d]) - 1j * (_pauliz[i_a,i_c] * _paulix[i_b,i_d] - _paulix[i_a,i_c] * _pauliz[i_b,i_d])
+            me *= 1j
+            me *= np.sqrt((2*Jab+1)*(2*Jcd+1)*6) * _ninej(0.5*oa.j, 0.5*ob.j, Jab, 0.5*oc.j, 0.5*od.j, Jcd, 1, 1, 1) * \
+                    np.sqrt(6*(oa.j+1)*(oc.j+1)) * (-1)**((oa.j+3)//2 + oa.l) * _sixj(0.5, 0.5, 1, 0.5*oc.j, 0.5*oa.j, oa.l) * \
+                    np.sqrt(6*(ob.j+1)*(od.j+1)) * (-1)**((ob.j+3)//2 + ob.l) * _sixj(0.5, 0.5, 1, 0.5*od.j, 0.5*ob.j, ob.l)
+            me *= -1
+            return me.real
+        def _me(a,b,c,d,Jab,Jcd):
+            norm = 1.0
+            if(a==b): norm /= np.sqrt(2.0)
+            if(c==d): norm /= np.sqrt(2.0)
+            oa, ob, oc, od = orbits.get_orbit(a), orbits.get_orbit(b), orbits.get_orbit(c), orbits.get_orbit(d)
+            me = me_NA(a,b,c,d,Jab,Jcd)
+            me -= me_NA(a,b,d,c,Jab,Jcd) * (-1.0)**((oc.j+od.j)//2+Jcd)
+            me *= norm
+            return me
+
+        for channels in op2.keys():
+            chbra = tbs.get_channel(channels[0])
+            chket = tbs.get_channel(channels[1])
+            for ibra in range(chbra.get_number_states()):
+                for iket in range(chket.get_number_states()):
+                    a, b = chbra.get_indices(ibra)
+                    c, d = chket.get_indices(iket)
+                    me = _me(a, b, c, d, chbra.J, chket.J)
+                    self.set_2bme_from_indices(a, b, c, d, chbra.J, chket.J, me)
+
 def main():
-    ms = ModelSpace.ModelSpace()
+    ms = ModelSpace()
     ms.set_modelspace_from_boundaries(4)
     op = Operator(verbose=False)
     op.allocate_operator(ms)
     op.print_operator()
 if(__name__=="__main__"):
     main()
+
+
 
 import math
 import timeit as timeit
@@ -1951,12 +2294,22 @@ nucleon2f = [n2f,l2f,m2f,s2f,t2f] = [0, 0, 0, -1, 1]  # nucleon 2f
 #quantum numbers
 qnumbers="_s1is1fs2is2f"+str(s1i)+str(s1f)+str(s2i)+str(s2f)+"_n1il1im1i-"+str(n1i)+str(l1i)+str(m1i)+"_n1fl1fm1f-"+str(n1f)+str(l1f)+str(m1f)+"_n2il2im2i-"+str(n2i)+str(l2i)+str(m2i)+"_n2fl2fm2f-"+str(n2f)+str(l2f)+str(m2f)
 
+## function to find specific values in strings
+def find_between(s, first, last):
+    try:
+        start   =   s.index( first ) + len( first )
+        end     =   s.index( last, start )
+        return s[start:end]
+    except ValueError:
+        print('find_between ERROR: nothing found')
+        sys.exit()
+
 
 
 def createfilesfunc(diagram,nucl1i,nucl1f,nucl2i,nucl2f,itoverin):
     for r in itoverin: 
         #rank
-        rank=f"_J{r:.0f}"
+        rank=f"_J{r}"
         #qnumbers
         # n1i,l1i,m1i,s1i,t1i = nucl1i # nucleon 1i
         # n1f,l1f,m1f,s1f,t1f = nucl1f # nucleon 1f
@@ -1966,10 +2319,10 @@ def createfilesfunc(diagram,nucl1i,nucl1f,nucl2i,nucl2f,itoverin):
         ######### filename before Q
         preQfile=diagram+rank+"_Tz0"
         ######### specifications for Takayukis calcs
-        postQfile='-NLO_TwBME-HO_NN-only_N3LO_EM500_bare_hw20_emax2_e2max4.snt'
-        postQfileexp='-NLO_TwBME-HO_NN-only_N3LO_EM500_bare_hw20_emax2_e2max4'+qnumbers+'.dat'
+        postQfile=f"-NLO_TwBME-HO_NN-only_N3LO_EM500_bare_hw20_emax2_e2max4.snt"
+        postQfileexp=f"-NLO_TwBME-HO_NN-only_N3LO_EM500_bare_hw20_emax2_e2max4"+qnumbers+".dat"
         ######### export to
-        fileexp=directory+'recoupled/'+preQfile.replace("_Tz0","_t1it1ft2it2f"+str(t1i)+str(t1f)+str(t2i)+str(t2f))+postQfileexp
+        fileexp=directory+f"recoupled/"+preQfile.replace(f"_Tz0",f"_t1it1ft2it2f"+str(t1i)+str(t1f)+str(t2i)+str(t2f))+postQfileexp
         ######### open file to write in
         file_save=open(fileexp,"w")
         print(preQfile+postQfile, file=file_save)
@@ -1979,17 +2332,34 @@ def createfilesfunc(diagram,nucl1i,nucl1f,nucl2i,nucl2f,itoverin):
         print("n2f, l2f, m2f, s2f, t2f=",nucl2f, file=file_save)
         # print("rankJ=",r)
         #iterator over Q values
+        print(find_between(diagram, 'SG', '_2B')=='Tel' or find_between(diagram, 'SG', '_2B')=='L')
+        print(find_between(diagram, 'SG', '_2B')=='Tmag')
         for Q in Qlist:
             #Q values
-            Q=f"_Q{Q:.0f}"
+            Q=f"_Q{Q}"
             ######### file you want to import values from
             fn = directory+preQfile+Q+postQfile
-            op = Operator(filename=fn, rankJ=r)
+            if (find_between(diagram, 'SG', '_2B')=='Tel' or find_between(diagram, 'SG', '_2B')=='L'):
+                if(abs(mud//2) > r): continue
+                op = Operator(filename=(fn), rankJ=r, rankP=(-1)**r, skew=True)
+                me = op.get_2bme_Mscheme_nlms(nucl1f,nucl2f,nucl1i,nucl2i,mud)
+                print(me)
+                print(me,file=file_save)  
+                print('done: Tel or L')
+                # return op 
+            elif find_between(diagram, 'SG', '_2B')=='Tmag':
+                if(abs(mud//2) > r): continue
+                op = Operator(filename=(fn), rankJ=r, rankP=(-1)**(r+1))
+                me = op.get_2bme_Mscheme_nlms(nucl1f,nucl2f,nucl1i,nucl2i,mud)
+                print(me)
+                print(me,file=file_save)  
+                print('done: Tmag')
+                # return op
             ######### final martix element
-                                         #f , f,   i , i 
-            me = op.get_2bme_Mscheme_nlms(nucl1f,nucl2f,nucl1i,nucl2i,mud)
+            #                              #f , f,   i , i 
+            # me = op.get_2bme_Mscheme_nlms(nucl1f,nucl2f,nucl1i,nucl2i,mud)
             # print(me)
-            print(me,file=file_save)  
+            # print(me,file=file_save)  
 
 def createallsimultfunc(nucleon1f,nucleon2f,nucleon1i,nucleon2i):
     print("nucleon1f,nucleon2f,nucleon1i,nucleon2i")
@@ -2001,27 +2371,180 @@ def createallsimultfunc(nucleon1f,nucleon2f,nucleon1i,nucleon2i):
     createfilesfunc('SGL_2B',nucleon1f,nucleon2f,nucleon1i,nucleon2i,itoverin=[2,4])
     print('succesfull')
 
-mud = s1f+s2f-s1i-s2i
-createfilesfunc('SGTmag_2B',nucleon1f,nucleon2f,nucleon1i,nucleon2i,itoverin=[1,3])
 
-# t1i=t1f=-1
-# t2i=t2f=1
-# s1i=s1f=1
-# for s2i in [1,-1]:
-#     for s2f in [1,-1]:
-#         for l1i in [0,1]:
-#             for l1f in [0,1]:
-#                 for l2i in [0,1]:
-#                     for l2f in [0,1]:
-#                         n1i=n2i=n1f=n2f=0
-#                         m1i=m2i=m1f=m2f=0
-#                         nucleon1i = [n1i,l1i,m1i,s1i,t1i] 
-#                         nucleon1f = [n1f,l1f,m1f,s1f,t1f] 
-#                         nucleon2i = [n2i,l2i,m2i,s2i,t2i] 
-#                         nucleon2f = [n2f,l2f,m2f,s2f,t2f]         
-#                         mud = s1f+s2f-s1i-s2i
-#                         qnumbers="_s1is1fs2is2f"+str(s1i)+str(s1f)+str(s2i)+str(s2f)+"_n1il1im1i-"+str(n1i)+str(l1i)+str(m1i)+"_n1fl1fm1f-"+str(n1f)+str(l1f)+str(m1f)+"_n2il2im2i-"+str(n2i)+str(l2i)+str(m2i)+"_n2fl2fm2f-"+str(n2f)+str(l2f)+str(m2f)
-#                         createallsimultfunc(nucleon1f,nucleon2f,nucleon1i,nucleon2i)
+# res = np.zeros(3, dtype=np.complex128)
+# if find_between(diagram, 'SG', '_2B')=='Tel':
+#     res += 4*np.pi * me * np.conjugate(BasicFunctions.VecPsi(Qvec,rank,mud//2)) * (-1.j)**rank
+# elif find_between(diagram, 'SG', '_2B')=='Tmag':
+#     res += 4*np.pi * me * np.conjugate(BasicFunctions.VecPhi(Qvec,rank,mud//2)) * (-1.j)**(rank+1)
+# elif find_between(diagram, 'SG', '_2B')=='L':
+#     res += 4*np.pi * me * np.conjugate(BasicFunctions.VecYLM(Qvec,rank,mud//2)) * (-1.j)**rank
+
+
+
+mud = s1f+s2f-s1i-s2i
+# createfilesfunc('SGTmag_2B',nucleon1f,nucleon2f,nucleon1i,nucleon2i,itoverin=[1,3,5])
+q_direction=np.array([1,0,0])
+# for Q in Qlist:
+#         Qvec = Q * q_direction
+#         # Qvec = Q * q_direction
+#         res = np.zeros(3, dtype=np.complex128)
+#         for rank in [2,4]:
+#             if(abs(mud//2) > rank): continue
+#             fn = f"SGL_2B_J{rank}_Tz0_Q{Q}-NLO_TwBME-HO_NN-only_N3LO_EM500_bare_hw20_emax2_e2max4.snt"
+#             op = Operator(filename=(directory+fn), rankJ=rank, rankP=(-1)**rank, skew=True)
+#             me = op.get_2bme_Mscheme_nlms(nucleon1f,nucleon2f,nucleon1i,nucleon2i,mud)
+#             preQfile="SGL_2B"+f"_J{rank}"+"_Tz0"
+#             ######### specifications for Takayukis calcs
+#             postQfile=f"-NLO_TwBME-HO_NN-only_N3LO_EM500_bare_hw20_emax2_e2max4.snt"
+#             postQfileexp=f"-NLO_TwBME-HO_NN-only_N3LO_EM500_bare_hw20_emax2_e2max4"+qnumbers+".dat"
+#             ######### export to
+#             fileexp=directory+f"recoupled/"+preQfile.replace(f"_Tz0",f"_t1it1ft2it2f"+str(t1i)+str(t1f)+str(t2i)+str(t2f))+postQfileexp
+#             ######### open file to write in
+#             file_save=open(fileexp,"w")
+#             print(preQfile+postQfile, file=file_save)
+#             print("n1i, l1i, m1i, s1i, t1i=",nucleon1i, file=file_save)
+#             print("n1f, l1f, m1f, s1f, t1f=",nucleon1f, file=file_save)
+#             print("n2i, l2i, m2i, s2i, t2i=",nucleon2i, file=file_save)
+#             print("n2f, l2f, m2f, s2f, t2f=",nucleon2f, file=file_save)
+#             print(me,file=file_save)  
+#             res += 4*np.pi * me * np.conjugate(BasicFunctions.VecYLM(Qvec,rank,mud//2)) * (-1.j)**rank
+            
+
+#         for rank in [2,4]:
+#             if(abs(mud//2) > rank): continue
+#             fn = f"SGTel_2B_J{rank}_Tz0_Q{Q}-NLO_TwBME-HO_NN-only_N3LO_EM500_bare_hw20_emax2_e2max4.snt"
+#             op = Operator(filename=(directory+fn), rankJ=rank, rankP=(-1)**rank, skew=True)
+#             me = op.get_2bme_Mscheme_nlms(nucleon1f,nucleon2f,nucleon1i,nucleon2i,mud)
+#             preQfile="SGTel_2B"+f"_J{rank}"+"_Tz0"
+#             ######### specifications for Takayukis calcs
+#             postQfile=f"-NLO_TwBME-HO_NN-only_N3LO_EM500_bare_hw20_emax2_e2max4.snt"
+#             postQfileexp=f"-NLO_TwBME-HO_NN-only_N3LO_EM500_bare_hw20_emax2_e2max4"+qnumbers+".dat"
+#             ######### export to
+#             fileexp=directory+f"recoupled/"+preQfile.replace(f"_Tz0",f"_t1it1ft2it2f"+str(t1i)+str(t1f)+str(t2i)+str(t2f))+postQfileexp
+#             ######### open file to write in
+#             file_save=open(fileexp,"w")
+#             print(preQfile+postQfile, file=file_save)
+#             print("n1i, l1i, m1i, s1i, t1i=",nucleon1i, file=file_save)
+#             print("n1f, l1f, m1f, s1f, t1f=",nucleon1f, file=file_save)
+#             print("n2i, l2i, m2i, s2i, t2i=",nucleon2i, file=file_save)
+#             print("n2f, l2f, m2f, s2f, t2f=",nucleon2f, file=file_save)
+#             print(me,file=file_save)  
+#             res += 4*np.pi * me * np.conjugate(BasicFunctions.VecPsi(Qvec,rank,mud//2)) * (-1.j)**rank
+
+#         for rank in [1,3,5]:
+#             if(abs(mud//2) > rank): continue
+#             fn = f"SGTmag_2B_J{rank}_Tz0_Q{Q}-NLO_TwBME-HO_NN-only_N3LO_EM500_bare_hw20_emax2_e2max4.snt"
+#             op = Operator(filename=(directory+fn), rankJ=rank, rankP=(-1)**(rank+1))
+#             me = op.get_2bme_Mscheme_nlms(nucleon1f,nucleon2f,nucleon1i,nucleon2i,mud)
+#             preQfile="SGmag_2B"+f"_J{rank}"+"_Tz0"
+#             ######### specifications for Takayukis calcs
+#             postQfile=f"-NLO_TwBME-HO_NN-only_N3LO_EM500_bare_hw20_emax2_e2max4.snt"
+#             postQfileexp=f"-NLO_TwBME-HO_NN-only_N3LO_EM500_bare_hw20_emax2_e2max4"+qnumbers+".dat"
+#             ######### export to
+#             fileexp=directory+f"recoupled/"+preQfile.replace(f"_Tz0",f"_t1it1ft2it2f"+str(t1i)+str(t1f)+str(t2i)+str(t2f))+postQfileexp
+#             ######### open file to write in
+#             file_save=open(fileexp,"w")
+#             print(preQfile+postQfile, file=file_save)
+#             print("n1i, l1i, m1i, s1i, t1i=",nucleon1i, file=file_save)
+#             print("n1f, l1f, m1f, s1f, t1f=",nucleon1f, file=file_save)
+#             print("n2i, l2i, m2i, s2i, t2i=",nucleon2i, file=file_save)
+#             print("n2f, l2f, m2f, s2f, t2f=",nucleon2f, file=file_save)
+#             print(me,file=file_save)  
+#             res += 4*np.pi * me * np.conjugate(BasicFunctions.VecPhi(Qvec,rank,mud//2)) * (-1.j)**(rank+1)
+#             print(me)
+
+
+t1i=t1f=-1
+t2i=t2f=1
+s2i=s2f=-1
+for s1i in [1,-1]:
+    for s1f in [1,-1]:
+        for l1i in [0,1]:
+            for l1f in [0,1]:
+                for l2i in [0,1]:
+                    for l2f in [0,1]:
+                        n1i=n2i=n1f=n2f=0
+                        m1i=m2i=m1f=m2f=0
+                        nucleon1i = [n1i,l1i,m1i,s1i,t1i] 
+                        nucleon1f = [n1f,l1f,m1f,s1f,t1f] 
+                        nucleon2i = [n2i,l2i,m2i,s2i,t2i] 
+                        nucleon2f = [n2f,l2f,m2f,s2f,t2f]         
+                        mud = s1f+s2f-s1i-s2i
+                        qnumbers="_s1is1fs2is2f"+str(s1i)+str(s1f)+str(s2i)+str(s2f)+"_n1il1im1i-"+str(n1i)+str(l1i)+str(m1i)+"_n1fl1fm1f-"+str(n1f)+str(l1f)+str(m1f)+"_n2il2im2i-"+str(n2i)+str(l2i)+str(m2i)+"_n2fl2fm2f-"+str(n2f)+str(l2f)+str(m2f)
+                        for rank in [2,4]:
+                            q_direction=np.array([1,0,0])
+                            preQfile="SGTel_2B"+f"_J{rank}"+"_Tz0"
+                            ######### specifications for Takayukis calcs
+                            postQfile=f"-NLO_TwBME-HO_NN-only_N3LO_EM500_bare_hw20_emax2_e2max4.snt"
+                            postQfileexp=f"-NLO_TwBME-HO_NN-only_N3LO_EM500_bare_hw20_emax2_e2max4"+qnumbers+".dat"
+                            ######### export to
+                            fileexp=directory+f"recoupled/"+preQfile.replace(f"_Tz0",f"_t1it1ft2it2f"+str(t1i)+str(t1f)+str(t2i)+str(t2f))+postQfileexp
+                            ######### open file to write in
+                            file_save=open(fileexp,"w")
+                            print(preQfile+postQfile, file=file_save)
+                            print("n1i, l1i, m1i, s1i, t1i=",nucleon1i, file=file_save)
+                            print("n1f, l1f, m1f, s1f, t1f=",nucleon1f, file=file_save)
+                            print("n2i, l2i, m2i, s2i, t2i=",nucleon2i, file=file_save)
+                            print("n2f, l2f, m2f, s2f, t2f=",nucleon2f, file=file_save)
+                            for Q in Qlist:
+                                    Qvec = Q * q_direction
+                                    # Qvec = Q * q_direction
+                                    res = np.zeros(3, dtype=np.complex128)
+                                    # if(abs(mud//2) > rank): continue
+                                    fn = f"SGTel_2B_J{rank}_Tz0_Q{Q}-NLO_TwBME-HO_NN-only_N3LO_EM500_bare_hw20_emax2_e2max4.snt"
+                                    op = Operator(filename=(directory+fn), rankJ=rank, rankP=(-1)**rank, skew=True)
+                                    me = op.get_2bme_Mscheme_nlms(nucleon1f,nucleon2f,nucleon1i,nucleon2i,mud)
+                                    print(me,file=file_save)  
+                                    res += 4*np.pi * me * np.conjugate(BasicFunctions.VecYLM(Qvec,rank,mud//2)) * (-1.j)**rank
+                        for rank in [2,4]:
+                            preQfile="SGL_2B"+f"_J{rank}"+"_Tz0"
+                            ######### specifications for Takayukis calcs
+                            postQfile=f"-NLO_TwBME-HO_NN-only_N3LO_EM500_bare_hw20_emax2_e2max4.snt"
+                            postQfileexp=f"-NLO_TwBME-HO_NN-only_N3LO_EM500_bare_hw20_emax2_e2max4"+qnumbers+".dat"
+                            ######### export to
+                            fileexp=directory+f"recoupled/"+preQfile.replace(f"_Tz0",f"_t1it1ft2it2f"+str(t1i)+str(t1f)+str(t2i)+str(t2f))+postQfileexp
+                            ######### open file to write in
+                            file_save=open(fileexp,"w")
+                            print(preQfile+postQfile, file=file_save)
+                            print("n1i, l1i, m1i, s1i, t1i=",nucleon1i, file=file_save)
+                            print("n1f, l1f, m1f, s1f, t1f=",nucleon1f, file=file_save)
+                            print("n2i, l2i, m2i, s2i, t2i=",nucleon2i, file=file_save)
+                            print("n2f, l2f, m2f, s2f, t2f=",nucleon2f, file=file_save)
+                            for Q in Qlist:
+                                    # if(abs(mud//2) > rank): continue
+                                    fn = f"SGL_2B_J{rank}_Tz0_Q{Q}-NLO_TwBME-HO_NN-only_N3LO_EM500_bare_hw20_emax2_e2max4.snt"
+                                    op = Operator(filename=(directory+fn), rankJ=rank, rankP=(-1)**rank, skew=True)
+                                    me = op.get_2bme_Mscheme_nlms(nucleon1f,nucleon2f,nucleon1i,nucleon2i,mud)
+                                    print(me,file=file_save)  
+                                    res += 4*np.pi * me * np.conjugate(BasicFunctions.VecPsi(Qvec,rank,mud//2)) * (-1.j)**rank
+                        for rank in [1,3,5]:
+                            preQfile="SGTmag_2B"+f"_J{rank}"+"_Tz0"
+                            ######### specifications for Takayukis calcs
+                            postQfile=f"-NLO_TwBME-HO_NN-only_N3LO_EM500_bare_hw20_emax2_e2max4.snt"
+                            postQfileexp=f"-NLO_TwBME-HO_NN-only_N3LO_EM500_bare_hw20_emax2_e2max4"+qnumbers+".dat"
+                            ######### export to
+                            fileexp=directory+f"recoupled/"+preQfile.replace(f"_Tz0",f"_t1it1ft2it2f"+str(t1i)+str(t1f)+str(t2i)+str(t2f))+postQfileexp
+                            ######### open file to write in
+                            file_save=open(fileexp,"w")
+                            print(preQfile+postQfile, file=file_save)
+                            print("n1i, l1i, m1i, s1i, t1i=",nucleon1i)
+                            print("n1i, l1i, m1i, s1i, t1i=",nucleon1i, file=file_save)
+                            print("n1f, l1f, m1f, s1f, t1f=",nucleon1f, file=file_save)
+                            print("n2i, l2i, m2i, s2i, t2i=",nucleon2i, file=file_save)
+                            print("n2f, l2f, m2f, s2f, t2f=",nucleon2f, file=file_save)
+                            for Q in Qlist:
+                                    Qvec = Q * q_direction
+                                    # Qvec = Q * q_direction
+                                    res = np.zeros(3, dtype=np.complex128)
+                                    # if(abs(mud//2) > rank): continue
+                                    fn = f"SGTmag_2B_J{rank}_Tz0_Q{Q}-NLO_TwBME-HO_NN-only_N3LO_EM500_bare_hw20_emax2_e2max4.snt"
+                                    op = Operator(filename=(directory+fn), rankJ=rank, rankP=(-1)**(rank+1))
+                                    me = op.get_2bme_Mscheme_nlms(nucleon1f,nucleon2f,nucleon1i,nucleon2i,mud)
+                                    print(me,file=file_save)  
+                                    res += 4*np.pi * me * np.conjugate(BasicFunctions.VecPhi(Qvec,rank,mud//2)) * (-1.j)**(rank+1)
+                                    # print(me)
+
 
 # s1i=s1f=1
 # for s2i in [1,-1]:
